@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ticket Price Tracker</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        h1 { color: #333; }
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .form-row {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+        }
+        input[type="text"], input[type="number"] {
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        input[type="text"] { flex: 1; min-width: 200px; }
+        input[type="number"] { width: 100px; }
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .btn-primary { background: #007bff; color: white; }
+        .btn-primary:hover { background: #0056b3; }
+        .btn-danger { background: #dc3545; color: white; }
+        .btn-danger:hover { background: #c82333; }
+        .btn-secondary { background: #6c757d; color: white; }
+        .btn-secondary:hover { background: #545b62; }
+        .btn-success { background: #28a745; color: white; }
+        .btn-success:hover { background: #1e7e34; }
+        .btn-sm { padding: 5px 10px; font-size: 12px; }
+        .event {
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 15px;
+            background: #fafafa;
+        }
+        .event-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .event-header h3 { margin: 0; color: #333; }
+        .site-badge {
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+        .site-vividseats { background: #4CAF50; color: white; }
+        .site-stubhub { background: #3f51b5; color: white; }
+        .event-url {
+            font-size: 13px;
+            color: #666;
+            word-break: break-all;
+            margin-bottom: 10px;
+        }
+        .event-url a { color: #007bff; }
+        .quantity-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            background: #e0e0e0;
+            border-radius: 4px;
+            font-size: 12px;
+            margin-left: 10px;
+        }
+        .tracked-sections { margin: 15px 0; }
+        .tracked-section {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px;
+            background: #e8f5e9;
+            border-radius: 4px;
+            margin-bottom: 5px;
+        }
+        .add-track-form {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+            flex-wrap: wrap;
+        }
+        .add-track-form input { flex: 1; min-width: 120px; }
+        .sections-list {
+            margin-top: 15px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .section-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px;
+            border-bottom: 1px solid #eee;
+        }
+        .section-row:hover { background: #f0f0f0; }
+        .alert-row { background: #fff3cd !important; }
+        .price { font-weight: bold; color: #28a745; }
+        .alert-price { color: #dc3545; }
+        .loading { color: #666; font-style: italic; }
+        .error { color: #dc3545; }
+        .no-events { color: #666; text-align: center; padding: 40px; }
+        .help-text { font-size: 12px; color: #888; margin-top: 5px; }
+    </style>
+</head>
+<body>
+    <h1>Ticket Price Tracker</h1>
+
+    <div class="card">
+        <h2>Add Event</h2>
+        <form action="/add" method="POST">
+            <div class="form-row">
+                <input type="text" name="url" placeholder="VividSeats or StubHub URL" required>
+                <input type="text" name="quantity" placeholder="Qty (e.g., 2 or 2-3)" style="width: 150px; flex: none;">
+                <button type="submit" class="btn-primary">Add Event</button>
+            </div>
+            <div class="help-text">Quantity is optional. Use "2" for exactly 2 tickets, or "2-4" for a range.</div>
+        </form>
+    </div>
+
+    <div class="card">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <h2>Tracked Events</h2>
+            <button onclick="checkAll()" class="btn-success">Check All Prices</button>
+        </div>
+
+        {% if events %}
+            {% for event_id, event in events.items() %}
+            <div class="event" id="event-{{ event_id }}">
+                <div class="event-header">
+                    <h3>
+                        <span class="site-badge site-{{ event.site }}">{{ event.site }}</span>
+                        Event #{{ event_id }}
+                        {% if event.quantity %}
+                        <span class="quantity-badge">{{ event.quantity }} tickets</span>
+                        {% endif %}
+                    </h3>
+                    <div>
+                        <button onclick="scrapeEvent('{{ event_id }}')" class="btn-secondary btn-sm">Fetch Prices</button>
+                        <form action="/remove/{{ event_id }}" method="POST" style="display: inline;">
+                            <button type="submit" class="btn-danger btn-sm" onclick="return confirm('Remove this event?')">Remove</button>
+                        </form>
+                    </div>
+                </div>
+
+                <div class="event-url">
+                    <a href="{{ event.url }}" target="_blank">{{ event.url }}</a>
+                </div>
+
+                <div class="tracked-sections">
+                    <strong>Tracked Sections:</strong>
+                    {% if event.tracked_sections %}
+                        {% for section, max_price in event.tracked_sections.items() %}
+                        <div class="tracked-section">
+                            <span>{{ section }} - Alert if &le; ${{ "%.2f"|format(max_price) }}</span>
+                            <form action="/untrack/{{ event_id }}/{{ section }}" method="POST" style="display: inline;">
+                                <button type="submit" class="btn-danger btn-sm">Remove</button>
+                            </form>
+                        </div>
+                        {% endfor %}
+                    {% else %}
+                        <div style="color: #888; margin: 10px 0;">No sections tracked yet. Fetch prices to see available sections.</div>
+                    {% endif %}
+                </div>
+
+                <form action="/track/{{ event_id }}" method="POST" class="add-track-form">
+                    <input type="text" name="section" placeholder="Section name" required>
+                    <input type="number" name="max_price" placeholder="Max $" step="0.01" required>
+                    <button type="submit" class="btn-primary btn-sm">Track Section</button>
+                </form>
+
+                <div class="sections-list" id="sections-{{ event_id }}"></div>
+            </div>
+            {% endfor %}
+        {% else %}
+            <div class="no-events">No events tracked yet. Add an event URL above to get started.</div>
+        {% endif %}
+    </div>
+
+    <script>
+        function scrapeEvent(eventId) {
+            const container = document.getElementById('sections-' + eventId);
+            container.innerHTML = '<div class="loading">Fetching prices...</div>';
+
+            fetch('/scrape/' + eventId)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        container.innerHTML = '<div class="error">Error: ' + data.error + '</div>';
+                        return;
+                    }
+
+                    const sections = data.sections;
+                    const alerts = data.alerts || [];
+                    const alertSections = alerts.map(a => a.section.toLowerCase());
+
+                    if (Object.keys(sections).length === 0) {
+                        container.innerHTML = '<div class="loading">No tickets found</div>';
+                        return;
+                    }
+
+                    // Sort by price
+                    const sorted = Object.entries(sections).sort((a, b) => a[1] - b[1]);
+
+                    let html = '<strong>Current Prices:</strong>';
+                    sorted.forEach(([section, price]) => {
+                        const isAlert = alertSections.includes(section.toLowerCase());
+                        const rowClass = isAlert ? 'section-row alert-row' : 'section-row';
+                        const priceClass = isAlert ? 'price alert-price' : 'price';
+                        const alertIcon = isAlert ? ' ⚠️ ALERT!' : '';
+                        html += `<div class="${rowClass}">
+                            <span>${section}${alertIcon}</span>
+                            <span class="${priceClass}">$${price.toFixed(2)}</span>
+                        </div>`;
+                    });
+
+                    container.innerHTML = html;
+
+                    // Show alert popup if any
+                    if (alerts.length > 0) {
+                        let msg = 'Price Alerts!\n\n';
+                        alerts.forEach(a => {
+                            msg += `${a.section}: $${a.price.toFixed(2)} (threshold: $${a.threshold.toFixed(2)})\n`;
+                        });
+                        alert(msg);
+                    }
+                })
+                .catch(err => {
+                    container.innerHTML = '<div class="error">Failed to fetch: ' + err + '</div>';
+                });
+        }
+
+        function checkAll() {
+            document.querySelectorAll('[id^="sections-"]').forEach(el => {
+                el.innerHTML = '<div class="loading">Checking...</div>';
+            });
+
+            fetch('/check')
+                .then(response => response.json())
+                .then(results => {
+                    let allAlerts = [];
+
+                    for (const [eventId, data] of Object.entries(results)) {
+                        const container = document.getElementById('sections-' + eventId);
+                        if (!container) continue;
+
+                        if (data.error) {
+                            container.innerHTML = '<div class="error">Error: ' + data.error + '</div>';
+                            continue;
+                        }
+
+                        const sections = data.sections;
+                        const alerts = data.alerts || [];
+                        const alertSections = alerts.map(a => a.section.toLowerCase());
+
+                        if (alerts.length > 0) {
+                            allAlerts.push({ eventId, alerts });
+                        }
+
+                        if (Object.keys(sections).length === 0) {
+                            container.innerHTML = '<div class="loading">No tickets found</div>';
+                            continue;
+                        }
+
+                        const sorted = Object.entries(sections).sort((a, b) => a[1] - b[1]);
+
+                        let html = '<strong>Current Prices:</strong>';
+                        sorted.forEach(([section, price]) => {
+                            const isAlert = alertSections.includes(section.toLowerCase());
+                            const rowClass = isAlert ? 'section-row alert-row' : 'section-row';
+                            const priceClass = isAlert ? 'price alert-price' : 'price';
+                            const alertIcon = isAlert ? ' ⚠️ ALERT!' : '';
+                            html += `<div class="${rowClass}">
+                                <span>${section}${alertIcon}</span>
+                                <span class="${priceClass}">$${price.toFixed(2)}</span>
+                            </div>`;
+                        });
+
+                        container.innerHTML = html;
+                    }
+
+                    if (allAlerts.length > 0) {
+                        let msg = 'Price Alerts!\n\n';
+                        allAlerts.forEach(({ eventId, alerts }) => {
+                            msg += `Event #${eventId}:\n`;
+                            alerts.forEach(a => {
+                                msg += `  ${a.section}: $${a.price.toFixed(2)} (threshold: $${a.threshold.toFixed(2)})\n`;
+                            });
+                            msg += '\n';
+                        });
+                        alert(msg);
+                    }
+                })
+                .catch(err => {
+                    alert('Failed to check prices: ' + err);
+                });
+        }
+    </script>
+</body>
+</html>

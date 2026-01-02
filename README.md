@@ -1,6 +1,6 @@
 # Ticket Price Tracker
 
-Simple CLI tool to track ticket prices on VividSeats and StubHub.
+Simple tool to track ticket prices on VividSeats and StubHub.
 
 ## Setup
 
@@ -9,7 +9,15 @@ pip install -r requirements.txt
 playwright install chromium
 ```
 
-## Usage
+## Web Interface
+
+```bash
+python app.py
+```
+
+Open http://localhost:5000 in your browser.
+
+## CLI Usage
 
 ### Add an event to track
 ```bash
