@@ -15,7 +15,7 @@ def parse_quantity_filter(quantity_str):
     if not quantity_str:
         return None, None
 
-    quantity_str = quantity_str.strip()
+    quantity_str = str(quantity_str).strip()
     if "-" in quantity_str:
         parts = quantity_str.split("-")
         return int(parts[0]), int(parts[1])
@@ -52,65 +52,41 @@ def scrape_vividseats(url, quantity_filter=None):
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
+        page.set_extra_http_headers({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
 
         try:
             page.goto(url, timeout=30000)
-            page.wait_for_timeout(3000)  # Wait for dynamic content
+            page.wait_for_timeout(5000)
 
-            # Try to find ticket listings - VividSeats uses various selectors
-            # Look for the ticket data in the page
-            content = page.content()
-
-            # VividSeats embeds ticket data in script tags as JSON
+            # Look for ticket data in script tags
             scripts = page.query_selector_all("script")
             for script in scripts:
-                text = script.inner_text()
-                if "ticketGroups" in text or "listings" in text:
-                    # Try to extract JSON data
-                    try:
-                        # Find JSON objects in the script
-                        matches = re.findall(r'\{[^{}]*"ticketGroups"[^{}]*\}|\{[^{}]*"listings"[^{}]*\}', text)
-                        for match in matches:
-                            data = json.loads(match)
-                            # Process ticket data
-                            for ticket in data.get("ticketGroups", data.get("listings", [])):
-                                section = ticket.get("section", ticket.get("sectionName", "Unknown"))
-                                price = ticket.get("price", ticket.get("listingPrice", 0))
-                                qty = ticket.get("quantity", ticket.get("availableQuantity", 1))
-
-                                if price and price > 0:
-                                    if matches_quantity(qty, min_qty, max_qty):
-                                        if section not in sections or price < sections[section]:
-                                            sections[section] = price
-                    except (json.JSONDecodeError, KeyError):
-                        continue
-
-            # Fallback: Try to scrape visible ticket elements
-            if not sections:
-                ticket_rows = page.query_selector_all("[data-testid='ticket-row'], .ticket-row, .listing-row")
-                for row in ticket_rows:
-                    try:
-                        section_el = row.query_selector("[data-testid='section'], .section, .ticket-section")
-                        price_el = row.query_selector("[data-testid='price'], .price, .ticket-price")
-                        qty_el = row.query_selector("[data-testid='quantity'], .quantity, .ticket-quantity")
-
-                        if section_el and price_el:
-                            section = section_el.inner_text().strip()
-                            price_text = price_el.inner_text().strip()
-                            price = float(re.sub(r'[^\d.]', '', price_text)) if price_text else 0
-
-                            qty = 1
-                            if qty_el:
-                                qty_text = qty_el.inner_text()
-                                qty_match = re.search(r'\d+', qty_text)
-                                if qty_match:
-                                    qty = int(qty_match.group())
-
-                            if price > 0 and matches_quantity(qty, min_qty, max_qty):
-                                if section not in sections or price < sections[section]:
-                                    sections[section] = price
-                    except Exception:
-                        continue
+                try:
+                    text = script.inner_text()
+                    # Look for JSON with ticket/listing data
+                    if '"tickets"' in text or '"listings"' in text or '"ticketGroups"' in text:
+                        # Try to find and parse embedded JSON
+                        json_matches = re.findall(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', text)
+                        for match in json_matches:
+                            try:
+                                data = json.loads(match)
+                                tickets = data.get("tickets", data.get("listings", data.get("ticketGroups", [])))
+                                if isinstance(tickets, list):
+                                    for ticket in tickets:
+                                        section = ticket.get("section", ticket.get("s", "Unknown"))
+                                        price = ticket.get("price", ticket.get("p", 0))
+                                        qty = ticket.get("quantity", ticket.get("q", 1))
+                                        if isinstance(price, dict):
+                                            price = price.get("amount", 0)
+                                        if price and float(price) > 0:
+                                            price = float(price)
+                                            if matches_quantity(qty, min_qty, max_qty):
+                                                if section not in sections or price < sections[section]:
+                                                    sections[section] = price
+                            except (json.JSONDecodeError, TypeError):
+                                continue
+                except Exception:
+                    continue
 
         except Exception as e:
             print(f"Error scraping VividSeats: {e}")
@@ -131,63 +107,126 @@ def scrape_stubhub(url, quantity_filter=None):
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
+        page.set_extra_http_headers({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
 
         try:
             page.goto(url, timeout=30000)
-            page.wait_for_timeout(3000)  # Wait for dynamic content
+            page.wait_for_timeout(5000)
 
-            # StubHub also uses embedded JSON data
-            content = page.content()
-
-            # Look for __NEXT_DATA__ or similar embedded data
-            next_data = page.query_selector("script#__NEXT_DATA__")
-            if next_data:
+            # Method 1: Look for __NEXT_DATA__ (Next.js apps)
+            next_data_el = page.query_selector("script#__NEXT_DATA__")
+            if next_data_el:
                 try:
-                    data = json.loads(next_data.inner_text())
-                    # Navigate to ticket listings in the data structure
-                    listings = (
-                        data.get("props", {})
-                        .get("pageProps", {})
-                        .get("listings", [])
-                    )
+                    data = json.loads(next_data_el.inner_text())
+                    # Try various paths where listings might be
+                    props = data.get("props", {}).get("pageProps", {})
+
+                    # Check common paths
+                    listings = props.get("listings", [])
+                    if not listings:
+                        listings = props.get("initialListings", [])
+                    if not listings:
+                        listings = props.get("eventListings", {}).get("listings", [])
+                    if not listings and "event" in props:
+                        listings = props.get("event", {}).get("listings", [])
+
                     for listing in listings:
-                        section = listing.get("section", listing.get("sectionName", "Unknown"))
-                        price = listing.get("price", listing.get("currentPrice", {}).get("amount", 0))
-                        qty = listing.get("quantity", listing.get("availableTickets", 1))
+                        section = listing.get("section", listing.get("sectionName", listing.get("s", "Unknown")))
+                        row = listing.get("row", listing.get("r", ""))
 
-                        if price and price > 0:
+                        # Get price - might be nested
+                        price = listing.get("price", 0)
+                        if isinstance(price, dict):
+                            price = price.get("amount", price.get("value", 0))
+                        if not price:
+                            price = listing.get("pricePerTicket", {}).get("amount", 0)
+                        if not price:
+                            price = listing.get("currentPrice", {}).get("amount", 0)
+
+                        qty = listing.get("quantity", listing.get("availableTickets", listing.get("q", 1)))
+
+                        if price and float(price) > 0:
+                            price = float(price)
                             if matches_quantity(qty, min_qty, max_qty):
-                                if section not in sections or price < sections[section]:
-                                    sections[section] = price
-                except (json.JSONDecodeError, KeyError):
-                    pass
+                                section_key = f"{section}" if not row else f"{section} Row {row}"
+                                if section_key not in sections or price < sections[section_key]:
+                                    sections[section_key] = price
+                except (json.JSONDecodeError, TypeError, KeyError) as e:
+                    print(f"Error parsing __NEXT_DATA__: {e}")
 
-            # Fallback: scrape visible elements
+            # Method 2: Look for inline script data
             if not sections:
-                ticket_cards = page.query_selector_all("[data-testid='listing-card'], .listing-card, .ticket-card")
-                for card in ticket_cards:
+                scripts = page.query_selector_all("script")
+                for script in scripts:
                     try:
-                        section_el = card.query_selector("[data-testid='section-name'], .section-name, .section")
-                        price_el = card.query_selector("[data-testid='price'], .price, .listing-price")
-                        qty_el = card.query_selector("[data-testid='quantity'], .quantity")
-
-                        if section_el and price_el:
-                            section = section_el.inner_text().strip()
-                            price_text = price_el.inner_text().strip()
-                            price = float(re.sub(r'[^\d.]', '', price_text)) if price_text else 0
-
-                            qty = 1
-                            if qty_el:
-                                qty_text = qty_el.inner_text()
-                                qty_match = re.search(r'\d+', qty_text)
-                                if qty_match:
-                                    qty = int(qty_match.group())
-
-                            if price > 0 and matches_quantity(qty, min_qty, max_qty):
-                                if section not in sections or price < sections[section]:
-                                    sections[section] = price
+                        text = script.inner_text()
+                        if "listing" in text.lower() and "price" in text.lower():
+                            # Try to extract JSON arrays/objects
+                            json_matches = re.findall(r'\[[\s\S]*?\]|\{[\s\S]*?\}', text)
+                            for match in json_matches:
+                                try:
+                                    data = json.loads(match)
+                                    items = data if isinstance(data, list) else [data]
+                                    for item in items:
+                                        if isinstance(item, dict) and ("section" in item or "price" in item):
+                                            section = item.get("section", item.get("sectionName", "Unknown"))
+                                            price = item.get("price", 0)
+                                            if isinstance(price, dict):
+                                                price = price.get("amount", 0)
+                                            qty = item.get("quantity", 1)
+                                            if price and float(price) > 0:
+                                                price = float(price)
+                                                if matches_quantity(qty, min_qty, max_qty):
+                                                    if section not in sections or price < sections[section]:
+                                                        sections[section] = price
+                                except (json.JSONDecodeError, TypeError):
+                                    continue
                     except Exception:
                         continue
+
+            # Method 3: Parse visible DOM elements
+            if not sections:
+                # Wait a bit more for dynamic content
+                page.wait_for_timeout(2000)
+
+                # Try various selectors StubHub might use
+                selectors = [
+                    "[data-testid='listing']",
+                    "[class*='ListingCard']",
+                    "[class*='listing-card']",
+                    "[class*='TicketCard']",
+                    "div[class*='Listing']"
+                ]
+
+                for selector in selectors:
+                    cards = page.query_selector_all(selector)
+                    if cards:
+                        for card in cards:
+                            try:
+                                text = card.inner_text()
+                                lines = [l.strip() for l in text.split('\n') if l.strip()]
+
+                                section = None
+                                price = None
+
+                                for line in lines:
+                                    # Look for section info
+                                    if re.match(r'^(Section|Sec\.?)\s+', line, re.I):
+                                        section = line
+                                    elif re.match(r'^[A-Z].*\d', line) and not price:
+                                        section = line
+
+                                    # Look for price
+                                    price_match = re.search(r'\$[\d,]+(?:\.\d{2})?', line)
+                                    if price_match:
+                                        price = float(re.sub(r'[^\d.]', '', price_match.group()))
+
+                                if section and price and price > 0:
+                                    if section not in sections or price < sections[section]:
+                                        sections[section] = price
+                            except Exception:
+                                continue
+                        break
 
         except Exception as e:
             print(f"Error scraping StubHub: {e}")
@@ -209,4 +248,4 @@ def scrape_event(url, quantity_filter=None):
     elif site == "stubhub":
         return scrape_stubhub(url, quantity_filter)
     else:
-        raise ValueError(f"Unsupported site. URL must be from VividSeats or StubHub.")
+        raise ValueError("Unsupported site. URL must be from VividSeats or StubHub.")
